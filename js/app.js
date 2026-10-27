@@ -213,7 +213,8 @@ async function scan() {
   } catch (e) {
     console.error(e);
     $('#scan-text').textContent = 'The scan failed.';
-    $('#scan-sub').innerHTML = esc(e.message) + ' <button class="ghost small" id="retry-scan">Try again</button>';
+    $('#scan-sub').innerHTML = esc(e.message) + ' Releases already scanned are saved, so trying again picks up where this stopped.'
+      + ' <button class="ghost small" id="retry-scan">Try again</button>';
     $('#retry-scan').onclick = scan;
   }
 }

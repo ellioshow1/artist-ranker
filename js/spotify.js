@@ -110,9 +110,13 @@ export async function api(path, { method = 'GET', body } = {}) {
       },
       body: body ? JSON.stringify(body) : undefined,
     });
-    if (res.status === 429 && attempt < 8) {
-      await sleep((Number(res.headers.get('Retry-After')) || 2 ** attempt) * 1000 + 250);
-      continue;
+    if (res.status === 429) {
+      // Dev-mode apps share one quota per developer account; once it's spent, retrying only digs deeper.
+      const data = await res.json().catch(() => null);
+      const wait = Number(res.headers.get('Retry-After')) || 0;
+      const quota = /quota/i.test(data?.reason || data?.error?.reason || '') || wait > 60;
+      if (!quota && attempt < 3) { await sleep((wait || 5 * 2 ** attempt) * 1000 + 250); continue; }
+      throw rateLimitError(quota, wait);
     }
     if (res.status === 401 && attempt < 1) { saveAuth({ ...loadAuth(), expiresAt: 0 }); continue; }
     if (res.status >= 500 && attempt < 3) { await sleep(1000 * (attempt + 1)); continue; }
@@ -127,6 +131,17 @@ export async function api(path, { method = 'GET', body } = {}) {
     }
     return data;
   }
+}
+
+function rateLimitError(quota, wait) {
+  const when = wait > 3600 ? `in about ${Math.ceil(wait / 3600)} hours`
+    : wait > 60 ? `in about ${Math.ceil(wait / 60)} minutes`
+    : quota ? 'later (it can take up to a day to reset)' : 'in a few minutes';
+  const err = new Error(quota
+    ? `Spotify's request quota for your developer account is used up (all your Client IDs share it). Try again ${when}.`
+    : `Spotify is rate-limiting this app (too many requests). Try again ${when}.`);
+  err.status = 429;
+  return err;
 }
 
 async function pageAll(path, limit) {
@@ -146,10 +161,14 @@ async function pageAllSafe(path, limit = 50) {
   catch (e) { if (e.status === 400 && limit > 10) return pageAll(path, 10); throw e; }
 }
 
+// Runs fn over items with `size` workers; once one fails the rest stop picking up work.
 async function pool(items, size, fn) {
-  let i = 0;
+  let i = 0, failed = false;
   await Promise.all(Array.from({ length: size }, async () => {
-    while (i < items.length) { const idx = i++; await fn(items[idx], idx); }
+    while (i < items.length && !failed) {
+      const idx = i++;
+      try { await fn(items[idx], idx); } catch (e) { failed = true; throw e; }
+    }
   }));
 }
 
@@ -191,28 +210,52 @@ function artistInfo(a) {
   };
 }
 
+const SCAN_KEY = 'artistRanker.scan.';
+const SCAN_KEEP_MS = 3 * 864e5;
+
+function slimAlbum(a) {
+  return { id: a.id, name: a.name, album_type: a.album_type, release_date: a.release_date, images: a.images };
+}
+
 // Every track (raw, not yet deduped) the artist is credited on.
 // No market param: Spotify already uses the logged-in user's country, and market=from_token now gets 400s.
+// Progress is kept in localStorage so a scan cut short by Spotify's quota resumes instead of starting over.
 export async function fetchCatalog(artistId, onProgress = () => {}) {
+  const key = SCAN_KEY + artistId;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(key)); } catch {}
+  if (!saved || Date.now() - saved.at > SCAN_KEEP_MS) saved = { at: Date.now(), groups: {}, tracks: {} };
+  const persist = () => { try { localStorage.setItem(key, JSON.stringify(saved)); } catch {} };
+
   const groups = ['album', 'single', 'appears_on', 'compilation'];
-  const albums = new Map();
-  for (const g of groups) {
-    onProgress({ phase: 'releases', text: `Finding ${g.replace('_', ' ')} releases…` });
-    const items = await pageAllSafe(`/artists/${artistId}/albums?include_groups=${g}`, 10);
-    for (const a of items) if (!albums.has(a.id)) albums.set(a.id, { album: a, group: g });
-  }
-  const list = [...albums.values()];
-  const tracks = [];
-  let done = 0;
-  await pool(list, 4, async ({ album, group }) => {
-    const items = await pageAllSafe(`/albums/${album.id}/tracks`);
-    for (const t of items) {
-      if (t.id && t.artists.some(a => a.id === artistId)) tracks.push(toTrack(t, album, group));
+  try {
+    for (const g of groups) {
+      if (saved.groups[g]) continue;
+      onProgress({ phase: 'releases', text: `Finding ${g.replace('_', ' ')} releases…` });
+      saved.groups[g] = (await pageAllSafe(`/artists/${artistId}/albums?include_groups=${g}`, 10)).map(slimAlbum);
+      persist();
     }
-    done++;
-    onProgress({ phase: 'tracks', done, total: list.length, found: tracks.length, text: album.name });
-  });
-  return tracks;
+    const albums = new Map();
+    for (const g of groups) for (const a of saved.groups[g]) if (!albums.has(a.id)) albums.set(a.id, { album: a, group: g });
+    const list = [...albums.values()];
+    let done = 0, found = 0;
+    await pool(list, 2, async ({ album, group }) => {
+      if (!saved.tracks[album.id]) {
+        const items = await pageAllSafe(`/albums/${album.id}/tracks`);
+        saved.tracks[album.id] = items
+          .filter(t => t.id && t.artists.some(a => a.id === artistId))
+          .map(t => toTrack(t, album, group));
+        if (++done % 25 === 0) persist();
+      } else done++;
+      found += saved.tracks[album.id].length;
+      onProgress({ phase: 'tracks', done, total: list.length, found, text: album.name });
+    });
+    try { localStorage.removeItem(key); } catch {}
+    return list.flatMap(({ album }) => saved.tracks[album.id]);
+  } catch (e) {
+    persist();
+    throw e;
+  }
 }
 
 export async function fetchTrack(id) {
