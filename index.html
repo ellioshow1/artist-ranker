@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Artist Ranker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎧</text></svg>">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">🎧 <span>Artist Ranker</span> <b id="brand-artist"></b></div>
+    <nav id="tabs" hidden>
+      <button data-view="home">Artists</button>
+      <button data-view="play">Matchups</button>
+      <button data-view="rank">Rankings</button>
+      <button data-view="songs">Songs</button>
+      <button data-view="backup">Backup</button>
+    </nav>
+  </header>
+
+  <div id="toast" role="status" hidden></div>
+
+  <main>
+    <!-- Connect -->
+    <section id="view-connect" class="view narrow" hidden>
+      <h1>Rank every song by any artist.</h1>
+      <p class="lede">Pick an artist, then two of their songs at a time: you choose the one you prefer. At the end you get your full ranking as a Spotify playlist.</p>
+      <div class="card" id="shared-login" hidden>
+        <h2>Log in</h2>
+        <p>Whoever shared this app needs to have added your Spotify email to it first.</p>
+        <button id="shared-login-btn" class="primary big">Log in with Spotify</button>
+      </div>
+      <details class="card steps" id="own-app">
+        <summary><h2>Set up your own Spotify access (about 3 minutes, one time)</h2></summary>
+        <ol>
+          <li>Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">Spotify Developer Dashboard</a> and log in.</li>
+          <li>Click <b>Create app</b>. Any name and description are fine.</li>
+          <li>Under <b>Redirect URIs</b>, add exactly:
+            <div class="copyrow"><code id="redirect-uri"></code><button class="ghost small" id="copy-redirect">Copy</button></div>
+          </li>
+          <li>Under <b>Which API/SDKs are you planning to use?</b>, tick <b>Web API</b>. Save.</li>
+          <li>Open the app's <b>Settings</b>, copy the <b>Client ID</b>, and paste it here:</li>
+        </ol>
+        <div class="row">
+          <input id="client-id" placeholder="Client ID" autocomplete="off" spellcheck="false">
+          <button id="connect-btn" class="primary">Connect Spotify</button>
+        </div>
+        <p class="hint">Spotify requires the account that owns a developer app to have Premium. Your login token stays in this browser.</p>
+      </details>
+    </section>
+
+    <!-- Artists -->
+    <section id="view-home" class="view narrow" hidden>
+      <h1>Who are we ranking?</h1>
+      <div id="home-search-box">
+        <input id="artist-search" type="search" placeholder="Search for an artist…" autocomplete="off">
+        <ul id="artist-results" class="songlist"></ul>
+      </div>
+      <div id="home-login" class="card" hidden>
+        <p>Log in to Spotify to search for artists. Your saved rankings below still work without it.</p>
+        <button id="home-login-btn" class="primary">Log in</button>
+      </div>
+      <div id="saved-artists" hidden>
+        <h2 class="section-h">Your rankings</h2>
+        <ul id="saved-list" class="songlist"></ul>
+      </div>
+      <p class="hint share-hint">Want friends to use it too? <button class="link" id="share-link">Copy the app link</button>. Everyone's rankings stay in their own browser.</p>
+    </section>
+
+    <!-- Scan -->
+    <section id="view-scan" class="view narrow" hidden>
+      <h1 id="scan-title">Digging through the vault…</h1>
+      <p class="lede" id="scan-text">Starting…</p>
+      <div class="bar"><div id="scan-bar"></div></div>
+      <p class="hint" id="scan-sub"></p>
+    </section>
+
+    <!-- Review songs before starting / manage songs after -->
+    <section id="view-songs" class="view" hidden>
+      <div class="songs-head">
+        <div>
+          <h1 id="songs-title">Your catalog</h1>
+          <p class="lede" id="songs-summary"></p>
+        </div>
+        <div class="row wrap" id="songs-actions"></div>
+      </div>
+      <div class="card filters" id="version-filters"></div>
+      <div class="row wrap">
+        <input id="song-search" type="search" placeholder="Search songs, features, albums…">
+        <input id="add-link" placeholder="Missing a song? Paste a Spotify track link">
+        <button id="add-link-btn" class="ghost">Add</button>
+      </div>
+      <div id="start-panel" class="card start" hidden>
+        <h2>Tournament format</h2>
+        <label class="slider">Swiss rounds: <b id="rounds-val"></b>
+          <input id="rounds" type="range" min="3" max="14" step="1">
+        </label>
+        <label class="slider">Exact finals for your top: <b id="k-val"></b>
+          <input id="finals-k" type="range" min="10" max="200" step="5">
+        </label>
+        <p id="estimate" class="hint"></p>
+        <button id="start-btn" class="primary big">Start ranking</button>
+      </div>
+      <ul id="song-list" class="songlist"></ul>
+    </section>
+
+    <!-- Matchups -->
+    <section id="view-play" class="view" hidden>
+      <div class="progress">
+        <div class="progress-label"><b id="stage-label"></b><span id="stage-count"></span><span id="pick-count"></span></div>
+        <div class="bar"><div id="stage-bar"></div></div>
+      </div>
+
+      <div id="matchup" class="matchup">
+        <article class="side" data-side="a">
+          <div class="art"><img alt=""></div>
+          <div class="meta">
+            <h2 class="name"></h2>
+            <p class="artists"></p>
+            <p class="album"></p>
+            <p class="record"></p>
+          </div>
+          <div class="embed"><div class="embed-slot" id="embed-a"></div></div>
+          <button class="pick primary big" data-pick="a">This one <kbd>←</kbd></button>
+          <button class="link remove" data-remove="a">Remove from ranking</button>
+        </article>
+        <div class="vs">VS</div>
+        <article class="side" data-side="b">
+          <div class="art"><img alt=""></div>
+          <div class="meta">
+            <h2 class="name"></h2>
+            <p class="artists"></p>
+            <p class="album"></p>
+            <p class="record"></p>
+          </div>
+          <div class="embed"><div class="embed-slot" id="embed-b"></div></div>
+          <button class="pick primary big" data-pick="b">This one <kbd>→</kbd></button>
+          <button class="link remove" data-remove="b">Remove from ranking</button>
+        </article>
+      </div>
+      <div class="controls" id="controls">
+        <button class="ghost" id="tie-btn">Can't split them <kbd>↓</kbd></button>
+        <button class="ghost" id="skip-btn">Ask me later <kbd>S</kbd></button>
+        <button class="ghost" id="undo-btn">Undo <kbd>Z</kbd></button>
+      </div>
+      <p class="hint center" id="play-hint">Play/pause: <kbd>A</kbd> left, <kbd>D</kbd> right. Full songs play if you're logged in to Spotify in this browser, otherwise 30-second previews.</p>
+
+      <div id="interstitial" class="card interstitial" hidden></div>
+    </section>
+
+    <!-- Rankings -->
+    <section id="view-rank" class="view" hidden>
+      <div class="songs-head">
+        <div>
+          <h1>Rankings</h1>
+          <p class="lede" id="rank-summary"></p>
+        </div>
+      </div>
+      <div class="card export">
+        <h2>Send it to Spotify</h2>
+        <div class="row wrap">
+          <input id="pl-name" placeholder="Playlist name">
+          <button id="save-pl" class="primary">Save as playlist</button>
+          <button id="copy-links" class="ghost">Copy song links</button>
+          <button id="dl-csv" class="ghost">Download CSV</button>
+        </div>
+        <p class="hint" id="pl-status"></p>
+      </div>
+      <input id="rank-search" type="search" placeholder="Find a song in your ranking…">
+      <ol id="rank-list" class="ranklist"></ol>
+    </section>
+
+    <!-- Backup -->
+    <section id="view-backup" class="view narrow" hidden>
+      <h1>Backup &amp; settings</h1>
+      <div class="card">
+        <h2>Progress backup</h2>
+        <p>Your progress saves automatically in this browser. Download a backup now and then, so clearing your browser data can't wipe it.</p>
+        <div class="row wrap">
+          <button id="export-json" class="primary">Download backup</button>
+          <label class="ghost filebtn">Restore from backup<input id="import-json" type="file" accept="application/json,.json" hidden></label>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Catalog</h2>
+        <p id="catalog-info"></p>
+        <div class="row wrap">
+          <button id="rescan" class="ghost">Rescan Spotify for new songs</button>
+          <button id="logout" class="ghost">Log out of Spotify</button>
+        </div>
+      </div>
+      <div class="card danger">
+        <h2>Start over</h2>
+        <p>Throws away every pick and returns to the song list. Download a backup first if you might want it back.</p>
+        <button id="reset" class="danger-btn">Reset tournament</button>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
