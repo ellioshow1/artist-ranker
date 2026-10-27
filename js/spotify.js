@@ -140,10 +140,10 @@ async function pageAll(path, limit) {
   return out;
 }
 
-// Dev-mode apps have had page limits cut before, so fall back to smaller pages if 50 is rejected.
-async function pageAllSafe(path) {
-  try { return await pageAll(path, 50); }
-  catch (e) { if (e.status === 400) return pageAll(path, 10); throw e; }
+// Dev-mode apps have had page limits cut before (artist albums is now max 10), so fall back to smaller pages if rejected.
+async function pageAllSafe(path, limit = 50) {
+  try { return await pageAll(path, limit); }
+  catch (e) { if (e.status === 400 && limit > 10) return pageAll(path, 10); throw e; }
 }
 
 async function pool(items, size, fn) {
@@ -192,19 +192,20 @@ function artistInfo(a) {
 }
 
 // Every track (raw, not yet deduped) the artist is credited on.
+// No market param: Spotify already uses the logged-in user's country, and market=from_token now gets 400s.
 export async function fetchCatalog(artistId, onProgress = () => {}) {
   const groups = ['album', 'single', 'appears_on', 'compilation'];
   const albums = new Map();
   for (const g of groups) {
     onProgress({ phase: 'releases', text: `Finding ${g.replace('_', ' ')} releases…` });
-    const items = await pageAllSafe(`/artists/${artistId}/albums?include_groups=${g}&market=from_token`);
+    const items = await pageAllSafe(`/artists/${artistId}/albums?include_groups=${g}`, 10);
     for (const a of items) if (!albums.has(a.id)) albums.set(a.id, { album: a, group: g });
   }
   const list = [...albums.values()];
   const tracks = [];
   let done = 0;
   await pool(list, 4, async ({ album, group }) => {
-    const items = await pageAllSafe(`/albums/${album.id}/tracks?market=from_token`);
+    const items = await pageAllSafe(`/albums/${album.id}/tracks`);
     for (const t of items) {
       if (t.id && t.artists.some(a => a.id === artistId)) tracks.push(toTrack(t, album, group));
     }
@@ -215,7 +216,7 @@ export async function fetchCatalog(artistId, onProgress = () => {}) {
 }
 
 export async function fetchTrack(id) {
-  const t = await api(`/tracks/${id}?market=from_token`);
+  const t = await api(`/tracks/${id}`);
   return toTrack(t, t.album, 'manual');
 }
 
